@@ -162,7 +162,7 @@ select{background:var(--bg3);border:1px solid var(--border);color:var(--text);bo
       <div class="chat-head">
         <div id="ch-av" class="av" style="pointer-events:none"></div>
         <div><div class="chat-name" id="ch-name">Sélectionnez une conversation</div><div class="chat-status" id="ch-status"></div></div>
-        <button id="call-btn" onclick="startCall()" style="display:none;margin-left:auto;background:var(--green);border:none;color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:16px" title="Appel audio">📞</button>
+        <button id="call-btn" onclick="startCall()" style="margin-left:auto;background:var(--green);border:none;color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:16px;visibility:hidden" title="Appel audio">📞</button>
       </div>
 
       <!-- CALL UI -->
@@ -332,7 +332,7 @@ function openConv(c) {
   av.style.background = c.group ? '#6c63ff55' : uColor(c.partner||'');
   document.getElementById('ch-status').textContent = c.group ? 'Discussion de groupe' : c.online ? '🟢 En ligne' : 'Hors ligne';
   const callBtn = document.getElementById('call-btn');
-  callBtn.style.display = c.group ? 'none' : 'flex';
+  callBtn.style.visibility = c.group ? 'hidden' : 'visible';
   loadConvList();
   fetchMessages(c.id);
   document.getElementById('inp').focus();
