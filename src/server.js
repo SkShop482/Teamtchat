@@ -157,6 +157,16 @@ wss.on('connection', (ws, req) => {
           c.send(JSON.stringify({ type: 'typing', conv: data.conv, from: user.username }));
       });
     }
+
+    // ── WebRTC signaling ──
+    if (['call-offer','call-answer','call-ice','call-reject','call-end'].includes(data.type)) {
+      const target = data.to;
+      if (!target) return;
+      wss.clients.forEach(c => {
+        if (c.readyState === WebSocket.OPEN && c.username === target)
+          c.send(JSON.stringify({ ...data, from: user.username }));
+      });
+    }
   });
 
   ws.on('close', () => {
