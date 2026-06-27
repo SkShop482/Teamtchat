@@ -584,35 +584,31 @@ function getCallPartner() {
   return parts.find(p => p !== me.username) || null;
 }
 
-function startCall() {
-  const partner = getCallPartner();
-  if (!partner) return;
-  callPartner = partner;
-  showCallOverlay(partner, 'Appel en cours…', false);
-  setupPC();
-  pc.createOffer().then(offer => {
-    pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: 'call-offer', to: partner, offer }));
-  });
-}
-
 function setupPC() {
   pc = new RTCPeerConnection(ICE_SERVERS);
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-    stream.getTracks().forEach(t => pc.addTrack(t, stream));
-  });
-  pc.ontrack = e => {
-    document.getElementById('remote-audio').srcObject = e.streams[0];
-  };
+  pc.ontrack = e => { document.getElementById('remote-audio').srcObject = e.streams[0]; };
   pc.onicecandidate = e => {
     if (e.candidate && callPartner)
       ws.send(JSON.stringify({ type: 'call-ice', to: callPartner, candidate: e.candidate }));
   };
   pc.onconnectionstatechange = () => {
     if (['disconnected','failed','closed'].includes(pc.connectionState)) endCall();
-    if (pc.connectionState === 'connected')
-      document.getElementById('call-status').textContent = '🟢 Connecté';
+    if (pc.connectionState === 'connected') document.getElementById('call-status').textContent = '🟢 Connecté';
   };
+  return navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+  });
+}
+
+function startCall() {
+  const partner = getCallPartner();
+  if (!partner) return;
+  callPartner = partner;
+  showCallOverlay(partner, 'Appel en cours…', false);
+  setupPC().then(() => pc.createOffer()).then(offer => {
+    pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: 'call-offer', to: partner, offer }));
+  }).catch(() => { endCall(); alert('Micro non disponible'); });
 }
 
 function showCallOverlay(partner, status, incoming) {
@@ -626,15 +622,17 @@ function showCallOverlay(partner, status, incoming) {
 
 function acceptCall() {
   if (!incomingOffer || !callPartner) return;
-  setupPC();
-  pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
-  pc.createAnswer().then(answer => {
+  const offer = incomingOffer;
+  incomingOffer = null;
+  setupPC().then(() => {
+    pc.setRemoteDescription(new RTCSessionDescription(offer));
+    return pc.createAnswer();
+  }).then(answer => {
     pc.setLocalDescription(answer);
     ws.send(JSON.stringify({ type: 'call-answer', to: callPartner, answer }));
-  });
-  document.getElementById('call-accept-btn').style.display = 'none';
-  document.getElementById('call-status').textContent = 'Connexion…';
-  incomingOffer = null;
+    document.getElementById('call-accept-btn').style.display = 'none';
+    document.getElementById('call-status').textContent = 'Connexion…';
+  }).catch(() => { endCall(); alert('Micro non disponible'); });
 }
 
 function endCall() {
