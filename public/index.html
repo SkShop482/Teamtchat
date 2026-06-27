@@ -162,7 +162,20 @@ select{background:var(--bg3);border:1px solid var(--border);color:var(--text);bo
       <div class="chat-head">
         <div id="ch-av" class="av" style="pointer-events:none"></div>
         <div><div class="chat-name" id="ch-name">Sélectionnez une conversation</div><div class="chat-status" id="ch-status"></div></div>
+        <button id="call-btn" onclick="startCall()" style="margin-left:auto;background:var(--green);border:none;color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:16px;visibility:hidden" title="Appel audio">📞</button>
       </div>
+
+      <!-- CALL UI -->
+      <div id="call-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;flex-direction:column;align-items:center;justify-content:center;gap:20px">
+        <div style="width:72px;height:72px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700" id="call-av"></div>
+        <div id="call-name" style="font-size:20px;font-weight:700"></div>
+        <div id="call-status" style="color:var(--text2);font-size:14px">Appel en cours…</div>
+        <div style="display:flex;gap:16px;margin-top:10px">
+          <button id="call-accept-btn" onclick="acceptCall()" style="display:none;background:var(--green);border:none;color:#fff;width:56px;height:56px;border-radius:50%;cursor:pointer;font-size:22px">✅</button>
+          <button onclick="endCall()" style="background:var(--red);border:none;color:#fff;width:56px;height:56px;border-radius:50%;cursor:pointer;font-size:22px">📵</button>
+        </div>
+      </div>
+      <audio id="remote-audio" autoplay></audio>
       <div class="msgs" id="msgs"><div class="empty">← Choisissez une conversation</div></div>
       <div class="input-bar" id="ibar" style="display:none">
         <textarea id="inp" rows="1" placeholder="Écrivez un message…" onkeydown="onKey(event)" oninput="resize(this);sendTyping()"></textarea>
@@ -318,6 +331,8 @@ function openConv(c) {
   av.textContent = c.group ? '#' : (c.partner||'')[0]?.toUpperCase();
   av.style.background = c.group ? '#6c63ff55' : uColor(c.partner||'');
   document.getElementById('ch-status').textContent = c.group ? 'Discussion de groupe' : c.online ? '🟢 En ligne' : 'Hors ligne';
+  const callBtn = document.getElementById('call-btn');
+  callBtn.style.visibility = c.group ? 'hidden' : 'visible';
   loadConvList();
   fetchMessages(c.id);
   document.getElementById('inp').focus();
@@ -389,6 +404,9 @@ function connectWS() {
     if (d.type === 'typing') {
       if (d.conv !== conv) return;
       showTyping(d.from);
+    }
+    if (['call-offer','call-answer','call-ice','call-reject','call-end'].includes(d.type)) {
+      handleCallSignal(d);
     }
   };
 
@@ -554,6 +572,99 @@ function esc(t) { const d=document.createElement('div'); d.appendChild(document.
 function fmt(d) { return d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); }
 function toggleSB() { document.getElementById('sb').classList.toggle('open'); document.getElementById('overlay').classList.toggle('show'); }
 function convLabel(c) { if(c==='global')return '#général'; const p=c.split('__'); return p.join(' ↔ '); }
+
+// ── WEBRTC CALLS ──────────────────────────────────────
+let pc = null, callPartner = null, incomingOffer = null;
+
+const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+function getCallPartner() {
+  if (!conv || conv === 'global') return null;
+  const parts = conv.split('__');
+  return parts.find(p => p !== me.username) || null;
+}
+
+function startCall() {
+  const partner = getCallPartner();
+  if (!partner) return;
+  callPartner = partner;
+  showCallOverlay(partner, 'Appel en cours…', false);
+  setupPC();
+  pc.createOffer().then(offer => {
+    pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: 'call-offer', to: partner, offer }));
+  });
+}
+
+function setupPC() {
+  pc = new RTCPeerConnection(ICE_SERVERS);
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+  });
+  pc.ontrack = e => {
+    document.getElementById('remote-audio').srcObject = e.streams[0];
+  };
+  pc.onicecandidate = e => {
+    if (e.candidate && callPartner)
+      ws.send(JSON.stringify({ type: 'call-ice', to: callPartner, candidate: e.candidate }));
+  };
+  pc.onconnectionstatechange = () => {
+    if (['disconnected','failed','closed'].includes(pc.connectionState)) endCall();
+    if (pc.connectionState === 'connected')
+      document.getElementById('call-status').textContent = '🟢 Connecté';
+  };
+}
+
+function showCallOverlay(partner, status, incoming) {
+  const o = document.getElementById('call-overlay');
+  o.style.display = 'flex';
+  document.getElementById('call-av').textContent = partner[0]?.toUpperCase();
+  document.getElementById('call-name').textContent = partner;
+  document.getElementById('call-status').textContent = status;
+  document.getElementById('call-accept-btn').style.display = incoming ? 'block' : 'none';
+}
+
+function acceptCall() {
+  if (!incomingOffer || !callPartner) return;
+  setupPC();
+  pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
+  pc.createAnswer().then(answer => {
+    pc.setLocalDescription(answer);
+    ws.send(JSON.stringify({ type: 'call-answer', to: callPartner, answer }));
+  });
+  document.getElementById('call-accept-btn').style.display = 'none';
+  document.getElementById('call-status').textContent = 'Connexion…';
+  incomingOffer = null;
+}
+
+function endCall() {
+  if (callPartner) ws.send(JSON.stringify({ type: 'call-end', to: callPartner }));
+  pc?.close(); pc = null;
+  callPartner = null; incomingOffer = null;
+  document.getElementById('call-overlay').style.display = 'none';
+  document.getElementById('remote-audio').srcObject = null;
+}
+
+function handleCallSignal(d) {
+  if (d.type === 'call-offer') {
+    callPartner = d.from;
+    incomingOffer = d.offer;
+    showCallOverlay(d.from, `📞 Appel entrant de ${d.from}`, true);
+  }
+  if (d.type === 'call-answer' && pc) {
+    pc.setRemoteDescription(new RTCSessionDescription(d.answer));
+  }
+  if (d.type === 'call-ice' && pc) {
+    pc.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(() => {});
+  }
+  if (d.type === 'call-reject') {
+    endCall();
+    alert(`${d.from} a refusé l'appel.`);
+  }
+  if (d.type === 'call-end') {
+    endCall();
+  }
+}
 
 // ── BOOT ──────────────────────────────────────────────
 checkSession();
